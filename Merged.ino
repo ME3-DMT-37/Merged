@@ -52,6 +52,7 @@ int tunecounterindex = 0;
 int allstrings = 1;
 int tunedstrings[6] = {0, 0, 0, 0, 0, 0};
 int sum = 0;
+int calibration = 0;
 
 // ----------------------------------------------------------------
 // TUNING VARIABLES
@@ -73,8 +74,10 @@ int led_pin = 13;
 
 int silent = 0;
 
-bool string_detuned[6] = {true, true, true, true, true, true};
-bool string_calibrated[6] = {true, true, true, true, true, true};
+bool string_overtuned[6] = {true, true, true, true, true, true};
+bool string_undertuned[6] = {true, true, true, true, true, true};
+bool string_calibrated_forward[6] = {true, true, true, true, true, true};
+bool string_calibrated_reverse[6] = {true, true, true, true, true, true};
 bool string_tuned[6] {true, true, true, true, true, true};
 
 float string_low[6] = {81.94, 109.37, 145.98, 194.87, 245.52, 327.73};
@@ -137,8 +140,8 @@ void loop() {
   genie.DoEvents();
 
   if (screen == MAIN_MENU) { //main menu
-    menuhighlight();  // returns values of "select" between 1 to 4.
-    menuchoice();     // uses returned values of "select" to determine value of "screen", and default "select" value for this screen.
+    selectMenu();  // returns values of "select" between 1 to 4.
+    confirmMenu();     // uses returned values of "select" to determine value of "screen", and default "select" value for this screen.
   }
 
   if (screen == CONFIRM_ARRANGEMENT) { //confirm arrangement
@@ -147,8 +150,8 @@ void loop() {
   }
 
   if (screen == SETTINGS) {
-    settingshighlight();
-    settingschoice();
+    selectSetting();
+    confirmSetting();
   }
 
   if (screen == POWER_OFF) { //power off
@@ -185,11 +188,14 @@ void loop() {
   }
 
   if (screen == WAIT_SCREEN) { //wait screen
-    if (string_tuned[string]) { //if tuning code throws up flag denoting successful tuning
+    if ((!calibration && string_tuned[string]) || (calibration && string_calibrated_forward[string] && string_calibrated_reverse[string])) { //if tuning code throws up flag denoting successful tuning
       selectNewString();
     } else if (silent > 4) {
-      genie.WriteObject(GENIE_OBJ_FORM, 6, 0); //returns user to pluck string screen,
+
+      // return to pluck string
+      genie.WriteObject(GENIE_OBJ_FORM, 6, 0);
       screen = PLUCK_STRING;
+
     }
 
     if (enter.update()) { //user manually cancels process
@@ -202,7 +208,7 @@ void loop() {
   }
 
   if (screen == COMPLETELY_TUNED) { //Guitar is fully tuned
-    //Confirming the arrangement chosen. By default, the tick button is highlighted as select = 5 (see menuchoice(), if (Screen==1))
+    //Confirming the arrangement chosen. By default, the tick button is highlighted as select = 5 (see confirmMenu(), if (Screen==1))
     selectFullyTuned();
     confirmFullyTuned();
   }
@@ -214,10 +220,14 @@ void loop() {
 
   if (sample()) {
 
-    if (!string_detuned[string]) {
+    if (!string_undertuned[string]) {
       detune(string, REVERSE);
-    } else if (!string_calibrated[string]) {
+    } else if (!string_calibrated_forward[string]) {
       calibrate(string, FORWARD);
+    } else if (!string_overtuned[string]) {
+      detune(string, FORWARD);
+    } else if (!string_calibrated_reverse[string]) {
+      calibrate(string, REVERSE);
     } else if (!string_tuned[string]) {
       tune(string);
     }
@@ -238,23 +248,6 @@ void loop() {
 
 // ----------------------------------------------------------------
 // INTERFACE FUNCTIONS
-// ----------------------------------------------------------------
-
-void displaySetup() {
-
-  // open serial port
-  Serial1.begin(9600);
-
-  // attach display to serial port
-  genie.Begin(Serial1);
-
-  // reset display by toggling reset line
-  digitalWrite(DISPLAY_RESET, LOW);
-  delay(1000);
-  digitalWrite(DISPLAY_RESET, HIGH);
-
-}
-
 // ----------------------------------------------------------------
 
 void buttonSetup() {
@@ -285,252 +278,282 @@ void buttonSetup() {
 
 // ----------------------------------------------------------------
 
-void memorySetup() {
+void displaySetup() {
 
-  // recover forward speeds from memory
-  for (int i = 0; i < 6; i++) {
+  // open serial port
+  Serial1.begin(9600);
 
-    speed_forward[i] = EEPROM.read(i);
-    speed_reverse[i] = EEPROM.read(i + 6);
+  // attach display to serial port
+  genie.Begin(Serial1);
 
-    Serial.printf("string %d: +%d / -%d\n", i + 1, speed_forward[i], speed_reverse[i]);
-
-  }
-
-  Serial.printf("\n");
-
-}
-
-// ----------------------------------------------------------------
-
-// highlight option on screen 0
-void menuhighlight() {
-
-  if (up.update()) { //highlight "confirm arrangement"
-    if (up.read()) {
-      genie.WriteObject(GENIE_OBJ_USERIMAGES, 0, 0);
-      select = CONFIRM_ARRANGEMENT; //Defines what Enter button does later on
-    }
-  }
-
-  if (right.update()) { //highlight "Settings"
-    if (right.read()) {
-      genie.WriteObject(GENIE_OBJ_USERIMAGES, 0, 1);
-      select = SETTINGS;
-    }
-  }
-
-  if (down.update()) { //highlight "power off"
-    if (down.read()) {
-      genie.WriteObject(GENIE_OBJ_USERIMAGES, 0, 2);
-      select = POWER_OFF;
-    }
-  }
-
-  if (left.update()) { //Highlight "make new arrangement"
-    if (left.read()) {
-      genie.WriteObject(GENIE_OBJ_USERIMAGES, 0, 3);
-      select = MAKE_ARRANGEMENT;
-    }
-  }
+  // reset display by toggling reset line
+  digitalWrite(DISPLAY_RESET, LOW);
+  delay(1000);
+  digitalWrite(DISPLAY_RESET, HIGH);
 
 }
 
 // ----------------------------------------------------------------
 
-// confirm option on screen 0
-void menuchoice() {
+void selectMenu() {
 
-  if (enter.update()) {
-    if (enter.read()) {
+  // check for rising edge on up button
+  if (up.update() && up.read()) {
 
-      // set new screen
-      screen = select;
+    // highlight tune option and update selection
+    genie.WriteObject(GENIE_OBJ_USERIMAGES, 0, 0);
+    select = CONFIRM_ARRANGEMENT;
 
-      // display new screen with default image
-      genie.WriteObject(GENIE_OBJ_FORM, screen, 0);
-      genie.WriteObject(GENIE_OBJ_USERIMAGES, screen, 0);
+  }
 
-      //default selection function
-      if (screen == CONFIRM_ARRANGEMENT) {
-        select = ATTACH_DEVICE;
-      } else if (screen == SETTINGS) {
-        level = 0;
-        select = MAIN_MENU;
-      } else if (screen == POWER_OFF) {
-        select = MAIN_MENU;
-      } else if (screen == MAKE_ARRANGEMENT) {
-        select = MAIN_MENU;
-      }
+  // check for rising edge on update button
+  if (right.update() && right.read()) {
 
-    }
+    // highlight settings option and update selection
+    genie.WriteObject(GENIE_OBJ_USERIMAGES, 0, 1);
+    select = SETTINGS;
+
+  }
+
+  // check for rising edge on down button
+  if (down.update() && down.read()) {
+
+    // highlight power option and update selection
+    genie.WriteObject(GENIE_OBJ_USERIMAGES, 0, 2);
+    select = POWER_OFF;
+
+  }
+
+  // check for rising edge on left button
+  if (left.update() && left.read()) {
+
+    // highlight arrangement option and update selection
+    genie.WriteObject(GENIE_OBJ_USERIMAGES, 0, 3);
+    select = MAKE_ARRANGEMENT;
+
   }
 
 }
 
 // ----------------------------------------------------------------
 
-// select arrangement on screen 1
+void confirmMenu() {
+
+  // check for rising edge on enter button
+  if (enter.update() && enter.read()) {
+
+    // set new screen
+    screen = select;
+
+    // display new screen with default image
+    genie.WriteObject(GENIE_OBJ_FORM, screen, 0);
+    genie.WriteObject(GENIE_OBJ_USERIMAGES, screen, 0);
+
+    //default selection function
+    if (screen == CONFIRM_ARRANGEMENT) {
+      select = ATTACH_DEVICE;
+      calibration = 0;
+    } else if (screen == SETTINGS) {
+      select = MAIN_MENU;
+      level = 0;
+    } else if (screen == POWER_OFF) {
+      select = MAIN_MENU;
+    } else if (screen == MAKE_ARRANGEMENT) {
+      select = MAIN_MENU;
+    }
+
+  }
+
+}
+
+// ----------------------------------------------------------------
+
 void selectArrangement() {
-  //Confirming the arrangement chosen. By default, the tick button is highlighted as select = 5 (see menuchoice(), if (Screen==1))
-  if (right.update()) {
-    if (right.read()) {
-      genie.WriteObject(GENIE_OBJ_USERIMAGES, 1, 1);//Highlights Return Button
-      select = MAIN_MENU; //selection main menu
+
+  // check for rising edge on left button
+  if (left.update() && left.read()) {
+
+    // highlight tick button and update selection
+    genie.WriteObject(GENIE_OBJ_USERIMAGES, 1, 0);
+    select = ATTACH_DEVICE;
+
+  }
+
+  // check for rising edge on right button
+  if (right.update() && right.read()) {
+
+    // highlight cross button and update selection
+    genie.WriteObject(GENIE_OBJ_USERIMAGES, 1, 1);
+    select = MAIN_MENU;
+
+  }
+
+}
+
+// ----------------------------------------------------------------
+
+void confirmArrangement() {
+
+  // check for rising edge on enter button
+  if (enter.update() && enter.read()) {
+
+    screen = select;
+
+    genie.WriteObject(GENIE_OBJ_FORM, screen, 0);
+    genie.WriteObject(GENIE_OBJ_USERIMAGES, screen, 0);
+
+    // set all strings untuned
+    for (int i = 0; i < 6; i++) {
+      tunedstrings[i] = 0;
+    }
+
+    sum = 0;
+
+    if (select == MAIN_MENU) {
+      select = CONFIRM_ARRANGEMENT;
+    }
+
+    if (select == ATTACH_DEVICE) {
+      select = CHOOSE_STRING;
     }
   }
-  if (left.update()) {
-    if (left.read()) {
-      genie.WriteObject(GENIE_OBJ_USERIMAGES, 1, 0); //Highlights Tick Button.
-      select = ATTACH_DEVICE;  //selection attach device
+
+}
+
+// ----------------------------------------------------------------
+
+void selectSetting() {
+
+  if (down.update() && down.read()) { //If down button is pressed, goes down a level. Level 1 = Strings, Level 2 = Guitar, Level 3 = Return
+    if (level < 2) {
+      level++;
+      //highlight object defined by level. Level = 1: Calibrate Guitar, Level = 2: Select Headstock, Level = 3: Return to Main Menu
+      genie.WriteObject(GENIE_OBJ_USERIMAGES, 2, level);
+      Serial.println(level);
+    }
+  }
+
+  if (up.update() && up.read()) { //If up button is pressed, goes up a level. Level 1 = Strings, Level 2 = Guitar, Level 3 = Return
+    if (level > 0) {
+      level--;
+      genie.WriteObject(GENIE_OBJ_USERIMAGES, 2, level);
+      Serial.println(level);
     }
   }
 }
 
 // ----------------------------------------------------------------
 
-// confirm arrangement selection on screen 1
-void confirmArrangement() { //Screen 1
-  if (enter.update()) {
-    if (enter.read()) {
-      screen = select;
-      genie.WriteObject(GENIE_OBJ_FORM, screen, 0); //go to form 0(main menu) or form 5 (attach device)
-      genie.WriteObject(GENIE_OBJ_USERIMAGES, screen, 0); //Display default image on each form (
+void confirmSetting() {
+
+  if (enter.update() && enter.read()) {
+
+    if (level == 0) {
+      calibration = 1;
+      screen = ATTACH_DEVICE;
+      select = CHOOSE_STRING;
+      genie.WriteObject(GENIE_OBJ_FORM, screen, 0); //go to form 5 (attach device)
+      genie.WriteObject(GENIE_OBJ_USERIMAGES, screen, 0); //Display default image on form
 
       for (int i = 0; i < 6; i++) { //Sets all strings to "Untuned"
         tunedstrings[i] = 0;
       }
+
       sum = 0;
+      select = CHOOSE_STRING; //default selection is tick, on Attach device screen
 
-      if (select == MAIN_MENU) {
-        select = CONFIRM_ARRANGEMENT; //default selection is confirm arrangement
-      }
-      if (select == ATTACH_DEVICE) {
-        select = CHOOSE_STRING; //default selection is tick, on Attach device screen
-      }
     }
-  }
-}
 
-// ----------------------------------------------------------------
-
-void settingshighlight() { //Screen 2
-  if (down.update()) { //If down button is pressed, goes down a level. Level 1 = Strings, Level 2 = Guitar, Level 3 = Return
-    if (down.read()) {
-      if (level < 2) {
-        level++;
-        //highlight object defined by level. Level = 1: Calibrate Guitar, Level = 2: Select Headstock, Level = 3: Return to Main Menu
-        genie.WriteObject(GENIE_OBJ_USERIMAGES, 2, level);
-        Serial.println(level);
-      }
+    if (level == 1) {
+      genie.WriteObject(GENIE_OBJ_FORM, 9, 0); //Select Headstock Form
+      genie.WriteObject(GENIE_OBJ_USERIMAGES, 15, 0);//Highlight Fender Headstock Image
+      screen = CHOOSE_HEADSTOCK;
+      select = MAIN_MENU; //default selection goes to main menu
     }
-  }
-  if (up.update()) { //If up button is pressed, goes up a level. Level 1 = Strings, Level 2 = Guitar, Level 3 = Return
-    if (up.read()) {
-      if (level > 0) {
-        level--;
-        genie.WriteObject(GENIE_OBJ_USERIMAGES, 2, level);
-        Serial.println(level);
-      }
+
+    if (level == 2) {//Return to main menu
+      genie.WriteObject(GENIE_OBJ_FORM, 0, 0); //Main menu Form
+      genie.WriteObject(GENIE_OBJ_USERIMAGES, 0, 1); //Highlight confirm arrangement
+      screen = MAIN_MENU;
+
+      // set defualt selection
+      select = SETTINGS;
     }
+
   }
-}
 
-void settingschoice() {//Screen 2
-  if (enter.update()) {
-    if (enter.read()) {
-
-      if (level == 0) {
-        //calibrate = 1;
-        screen = ATTACH_DEVICE;
-        genie.WriteObject(GENIE_OBJ_FORM, screen, 0); //go to form 5 (attach device)
-        genie.WriteObject(GENIE_OBJ_USERIMAGES, screen, 0); //Display default image on form
-
-        for (int i = 0; i < 6; i++) { //Sets all strings to "Untuned"
-          tunedstrings[i] = 0;
-        }
-        sum = 0;
-        select = CHOOSE_STRING; //default selection is tick, on Attach device screen
-      }
-
-      if (level == 1) {
-        Serial.println(level);
-        genie.WriteObject(GENIE_OBJ_FORM, 9, 0); //Select Headstock Form
-        genie.WriteObject(GENIE_OBJ_USERIMAGES, 15, 0);//Highlight Fender Headstock Image
-        screen = CHOOSE_HEADSTOCK;
-        select = MAIN_MENU; //default selection goes to main menu
-      }
-
-      if (level == 2) {//Return to main menu
-        Serial.println(level);
-        genie.WriteObject(GENIE_OBJ_FORM, 0, 0); //Main menu Form
-        genie.WriteObject(GENIE_OBJ_USERIMAGES, 0, 1); //Highlight confirm arrangement
-        screen = MAIN_MENU;
-        select = SETTINGS; //default selection is confirm arrangement
-      }
-    }
-  }
 }
 
 // ----------------------------------------------------------------
 
 void poweroff() { //Screen 3
-  if (enter.update()) {
-    if (enter.read()) {
-      screen = select; //go to selection defined by if statements/ previous screen.
-      genie.WriteObject(GENIE_OBJ_FORM, screen, 0);
-      genie.WriteObject(GENIE_OBJ_USERIMAGES, screen, 2);
-      select = POWER_OFF; //default selection is "Confirm arrangement"
-    }
+
+  if (enter.update() && enter.read()) {
+
+    screen = select; //go to selection defined by if statements/ previous screen.
+    genie.WriteObject(GENIE_OBJ_FORM, screen, 0);
+    genie.WriteObject(GENIE_OBJ_USERIMAGES, screen, 2);
+
+    // set default selection
+    select = POWER_OFF;
+
   }
+
 }
 
 // ----------------------------------------------------------------
 
 void newarrangehighlight() { //Screen 4
-  if (enter.update()) {
-    if (enter.read()) {
-      screen = select; //go to selection defined by if statements/ previous screen.
-      genie.WriteObject(GENIE_OBJ_FORM, screen, 0);
-      genie.WriteObject(GENIE_OBJ_USERIMAGES, screen, 3);
-      select = MAKE_ARRANGEMENT; //default selection is "Confirm arrangement"
-    }
+
+  if (enter.update() && enter.read()) {
+    screen = select; //go to selection defined by if statements/ previous screen.
+    genie.WriteObject(GENIE_OBJ_FORM, screen, 0);
+    genie.WriteObject(GENIE_OBJ_USERIMAGES, screen, 3);
+    select = MAKE_ARRANGEMENT; //default selection is "Confirm arrangement"
   }
+
 }
 
 // ----------------------------------------------------------------
 
 void attachhighlight() { //Screen 5
   //Confirming the device has been attached. Tick button is selected by default as select = 6, (see confirmArrangement(), if screen==5)
-  if (right.update()) {
-    if (right.read()) {
-      genie.WriteObject(GENIE_OBJ_USERIMAGES, 5, 1); //Highlight Return Button
+  if (right.update() && right.read()) {
+    genie.WriteObject(GENIE_OBJ_USERIMAGES, 5, 1); //Highlight Return Button
+    if (!calibration) {
       select = CONFIRM_ARRANGEMENT; //select confirm arrangement
     }
-  }
-  if (left.update()) {
-    if (left.read()) {
-      genie.WriteObject(GENIE_OBJ_USERIMAGES, 5, 0); //Highlight Tick Button
-      select = CHOOSE_STRING; //select "choose string(s)"
+    else {
+      select = SETTINGS;
     }
+  }
+
+  if (left.update() && left.read()) {
+    genie.WriteObject(GENIE_OBJ_USERIMAGES, 5, 0); //Highlight Tick Button
+    select = CHOOSE_STRING; //select "choose string(s)"
   }
 }
 
 // ----------------------------------------------------------------
 
 void attachchoice() { //Screen 5
-  if (enter.update()) {
-    if (enter.read()) {
-      screen = select; //go to selection defined by if statements
-      genie.WriteObject(GENIE_OBJ_FORM, screen, 0); //Go to either Select String (Screen 6), or Confirm Arrangement Screen (Screen 1)
 
-      if (select == CHOOSE_STRING) {
-        string = 0; //Highlight 1st string by default when on Level 1
-        level = 2; //highlight guitar by default
-      }
-      if (select == CONFIRM_ARRANGEMENT) {
-        select = ATTACH_DEVICE; //highlight tick button on Confirm Arrangement screen (Screen 1)
-      }
+  if (enter.update() && enter.read()) {
+
+    screen = select; //go to selection defined by if statements
+    genie.WriteObject(GENIE_OBJ_FORM, screen, 0); //Go to either Select String (Screen 6), or Confirm Arrangement Screen (Screen 1)
+
+    if (select == CHOOSE_STRING) {
+      string = 0; //Highlight 1st string by default when on Level 1
+      oldstring = 1;
+      level = 2; //highlight guitar by default
+    }
+    if (select == CONFIRM_ARRANGEMENT) {
+      select = ATTACH_DEVICE; //highlight tick button on Confirm Arrangement screen (Screen 1)
+    }
+    if (select == SETTINGS) {
+      level = 0;
+
     }
   }
 }
@@ -538,38 +561,34 @@ void attachchoice() { //Screen 5
 // ----------------------------------------------------------------
 
 void selectstrhighlight() { //Screen 6
-  if (down.update()) { //If down button is pressed, goes down a level. Level 1 = Strings, Level 2 = Guitar, Level 3 = Return
-    if (down.read()) {
-      if (level < 3) {
-        level++;
-      }
+
+  if (down.update() && down.read()) { //If down button is pressed, goes down a level. Level 1 = Strings, Level 2 = Guitar, Level 3 = Return
+    if (level < 3) {
+      level++;
     }
   }
-  if (up.update()) { //If up button is pressed, goes up a level. Level 1 = Strings, Level 2 = Guitar, Level 3 = Return
-    if (up.read()) {
-      if (level > 1) {
-        level--;
-      }
+
+  if (up.update() && up.read()) { //If up button is pressed, goes up a level. Level 1 = Strings, Level 2 = Guitar, Level 3 = Return
+    if (level > 1) {
+      level--;
     }
   }
 
   if (level == 1) {
-    if (right.update()) {
-      if (right.read()) {
-        oldstring = string; //Remembers what the previous string was, so can highlight it appropriately when not selected
-        string++;
-        if (string > 5) {
-          string = 0;
-        }
+
+    if (right.update() && right.read()) {
+      oldstring = string; //Remembers what the previous string was, so can highlight it appropriately when not selected
+      string++;
+      if (string > 5) {
+        string = 0;
       }
     }
-    if (left.update()) {
-      if (left.read()) {
-        oldstring = string; //Remembers what the previous string was, so can highlight it appropriately when not selected
-        string--;
-        if (string < 0) { //Strings are "Wrapped". Pressing left on far left string goes to far right string
-          string = 5;
-        }
+
+    if (left.update() && left.read()) {
+      oldstring = string; //Remembers what the previous string was, so can highlight it appropriately when not selected
+      string--;
+      if (string < 0) { //Strings are "Wrapped". Pressing left on far left string goes to far right string
+        string = 5;
       }
     }
 
@@ -585,9 +604,11 @@ void selectstrhighlight() { //Screen 6
     }
     genie.WriteObject(GENIE_OBJ_USERIMAGES, 12, 0); //unhighlight the guitar
     genie.WriteObject(GENIE_OBJ_USERIMAGES, 13, 0); //unhighlight tick button
+
   }
 
   if (level == 2) {
+
     for (int strings = 0; strings < 6; strings++) {
       if (tunedstrings[strings] == 0) {
         genie.WriteObject(GENIE_OBJ_USERIMAGES, strings + 6, 0); //unhighlight every string but tuned ones.
@@ -596,73 +617,93 @@ void selectstrhighlight() { //Screen 6
         genie.WriteObject(GENIE_OBJ_USERIMAGES, strings + 6, 2);
       }
     }
+
     genie.WriteObject(GENIE_OBJ_USERIMAGES, 12, 1); //highlight the guitar
     genie.WriteObject(GENIE_OBJ_USERIMAGES, 13, 0); //unhighlight return button
+
   }
 
   if (level == 3) {
     genie.WriteObject(GENIE_OBJ_USERIMAGES, 12, 0); //unhighlight the guitar
     genie.WriteObject(GENIE_OBJ_USERIMAGES, 13, 1); //highlight the return button
   }
+
 }
 
 // ----------------------------------------------------------------
 
 void selectstrchoice() { //Screen 6. Potentially have this return a string number, not a void.
-  if (enter.update()) {
-    if (enter.read()) {
-      if (level == 1) {
-        genie.WriteObject(GENIE_OBJ_USERIMAGES, stringindex, 3); //requests user to pluck string that was highlighted in "selectstrhighlight" func
-        genie.WriteObject(GENIE_OBJ_USERIMAGES, 13, 1); //highlights return button
-        select = CHOOSE_STRING;
-        screen = PLUCK_STRING;
-        allstrings = 0;
+
+  if (enter.update() && enter.read()) {
+
+    if (level == 1) {
+      genie.WriteObject(GENIE_OBJ_USERIMAGES, stringindex, 3); //requests user to pluck string that was highlighted in "selectstrhighlight" func
+      genie.WriteObject(GENIE_OBJ_USERIMAGES, 13, 1); //highlights return button
+      select = CHOOSE_STRING;
+      screen = PLUCK_STRING;
+      allstrings = 0;
+      if (!calibration) {
         string_tuned[string] = false;
       }
-      if (level == 2) { //if selecting all strings
-        tunecounter = 0; //resets the tuner counter if this option is selected
-        for (int i = 0; i < 6; i++) {
-          tunedstrings[i] = 0;
-        }
-        allstringsfunc();
+      else {
+        string_undertuned[string] = false;
+        string_calibrated_forward[string] = false;
+        string_overtuned[string] = false;
+        string_calibrated_reverse[string] = false;
       }
-      if (level == 3) {
+    }
+
+    if (level == 2) { //if selecting all strings
+      tunecounter = 0; //resets the tuner counter if this option is selected
+      for (int i = 0; i < 6; i++) {
+        tunedstrings[i] = 0;
+      }
+      allstringsfunc();
+    }
+
+    if (level == 3) {
+      if (!calibration) {
         genie.WriteObject(GENIE_OBJ_FORM, 1, 0); //returns to confirm arrangement screen
         select = ATTACH_DEVICE; //highlights tick button on confirm arrangement screen by default
         screen = CONFIRM_ARRANGEMENT;
       }
+      else {
+        genie.WriteObject(GENIE_OBJ_FORM, 2, 0); //returns to confirm arrangement screen
+        level = 0; //highlights tick button on confirm arrangement screen by default
+        screen = SETTINGS;
+      }
     }
   }
+
 }
 
 // ----------------------------------------------------------------
 
 void selectHeadstock() { //Screen 10
-  if (right.update()) {
-    if (right.read()) {
-      genie.WriteObject(GENIE_OBJ_USERIMAGES, 15, 1);
-      select = SETTINGS;//selection main menu
-    }
+
+  if (right.update() && right.read()) {
+    genie.WriteObject(GENIE_OBJ_USERIMAGES, 15, 1);
+    select = SETTINGS;//selection main menu
   }
-  if (left.update()) {
-    if (left.read()) {
-      genie.WriteObject(GENIE_OBJ_USERIMAGES, 15, 0);
-      select = SETTINGS;// selection main menu
-    }
+
+  if (left.update() && left.read()) {
+    genie.WriteObject(GENIE_OBJ_USERIMAGES, 15, 0);
+    select = SETTINGS;// selection main menu
   }
+
 }
 
 // ----------------------------------------------------------------
 
 void confirmHeadstock() {//Screen 10
-  if (enter.update()) {
-    if (enter.read()) {
-      screen = select; //go to selection defined by if statements in headstock highlight/ previous screen
-      genie.WriteObject(GENIE_OBJ_FORM, screen, 0);
-      genie.WriteObject(GENIE_OBJ_USERIMAGES, screen, 0);
-      level = 0; //default selection is confirm arrangement
-    }
+
+  if (enter.update() && enter.read()) {
+    screen = select; //go to selection defined by if statements in headstock highlight/ previous screen
+    genie.WriteObject(GENIE_OBJ_FORM, screen, 0);
+    genie.WriteObject(GENIE_OBJ_USERIMAGES, screen, 0);
+    level = 0; //default selection is confirm arrangement
   }
+
 }
 
 // ----------------------------------------------------------------
@@ -711,36 +752,35 @@ void allstringsfunc() {
 // ----------------------------------------------------------------
 
 void selectFullyTuned() {
-  if (right.update()) {
-    if (right.read()) {
-      genie.WriteObject(GENIE_OBJ_USERIMAGES, 14, 1);//Highlights Return Button
-      select = CHOOSE_STRING; //selection selectstrings (screen 6)
-    }
+
+  if (right.update() && right.read()) {
+    genie.WriteObject(GENIE_OBJ_USERIMAGES, 14, 1);//Highlights Return Button
+    select = CHOOSE_STRING; //selection selectstrings (screen 6)
   }
-  if (left.update()) {
-    if (left.read()) {
-      genie.WriteObject(GENIE_OBJ_USERIMAGES, 14, 0); //Highlights Tick Button.
-      select = MAIN_MENU;  //selection main menu (Screen 0)
-    }
+
+  if (left.update() && left.read()) {
+    genie.WriteObject(GENIE_OBJ_USERIMAGES, 14, 0); //Highlights Tick Button.
+    select = MAIN_MENU;  //selection main menu (Screen 0)
   }
+
 }
 
 // ----------------------------------------------------------------
 
 void confirmFullyTuned() {
-  if (enter.update()) {
-    if (enter.read()) {
-      genie.WriteObject(GENIE_OBJ_FORM, select, 0); //returns to choose string screen (if select = 6), returns to main menu (if select = 0)
-      screen = select;
-      sum = 0;
-      select = CONFIRM_ARRANGEMENT;
-      level = 2;
-      string = 0;
-      for (int i = 0; i < 6; i++) { //Sets all strings to "Untuned"
-        tunedstrings[i] = 0;
-      }
+
+  if (enter.update() && enter.read()) {
+    genie.WriteObject(GENIE_OBJ_FORM, select, 0); //returns to choose string screen (if select = 6), returns to main menu (if select = 0)
+    screen = select;
+    sum = 0;
+    select = CONFIRM_ARRANGEMENT;
+    level = 2;
+    string = 0;
+    for (int i = 0; i < 6; i++) { //Sets all strings to "Untuned"
+      tunedstrings[i] = 0;
     }
   }
+
 }
 
 // ----------------------------------------------------------------
@@ -794,7 +834,11 @@ void detune(int string, int direction) {
     motorRun(string, 0);
 
     // raise success flag
-    string_detuned[string] = true;
+    if (direction == FORWARD) {
+      string_overtuned[string] = true;
+    } else if (direction == REVERSE) {
+      string_undertuned[string] = true;
+    }
 
     digitalWrite(led_pin, HIGH);
 
@@ -805,11 +849,15 @@ void detune(int string, int direction) {
 
   }
 
+  speed = 0;
+
 }
 
 // ----------------------------------------------------------------
 
 void calibrate(int string, int direction) {
+
+  started = true;
 
   float total = 0;
   float average = 0;
@@ -866,8 +914,11 @@ void calibrate(int string, int direction) {
         // update EEPROM
         EEPROM.update(string, speed);
 
+        // reset started flag
+        started = false;
+
         // raise calibrated flag
-        string_calibrated[string] = true;
+        string_calibrated_forward[string] = true;
 
         digitalWrite(led_pin, HIGH);
 
@@ -904,10 +955,13 @@ void calibrate(int string, int direction) {
         speed_reverse[string] = speed;
 
         // update EEPROM
-        EEPROM.update(string, speed);
+        EEPROM.update(string + 6, speed);
+
+        // reset started flag
+        started = false;
 
         // raise calibrated flag
-        string_calibrated[string] = true;
+        string_calibrated_reverse[string] = true;
 
         digitalWrite(led_pin, HIGH);
 
@@ -944,6 +998,7 @@ void tune(int string) {
   // log note and peak voltage
   Serial.printf("tuning: %3.2f Hz (%3.2f V)\n", f, p);
 
+  //if string frequency is higher than the upper bound of acceptable frequency range
   if (f > string_high[string]) {
 
     // loosen string (over-tuned)
@@ -1044,5 +1099,25 @@ void motorRun(int motor, int speed) {
 
   // set direction pin
   digitalWrite(direction_pin, direction);
+
+}
+
+// ----------------------------------------------------------------
+// MEMORY FUNCTIONS
+// ----------------------------------------------------------------
+
+void memorySetup() {
+
+  // recover forward speeds from memory
+  for (int i = 0; i < 6; i++) {
+
+    speed_forward[i] = EEPROM.read(i);
+    speed_reverse[i] = EEPROM.read(i + 6);
+
+    Serial.printf("string %d: +%d / -%d\n", i + 1, speed_forward[i], speed_reverse[i]);
+
+  }
+
+  Serial.printf("\n");
 
 }
