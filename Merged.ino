@@ -101,7 +101,6 @@ int iteration = 0;
 // ----------------------------------------------------------------
 
 int motor_pin[6] = {3, 4, 5, 6, 10, 9};
-
 int direction_pin = 11;
 
 // ----------------------------------------------------------------
@@ -658,6 +657,10 @@ void selectstrchoice() { //Screen 6. Potentially have this return a string numbe
       for (int i = 0; i < 6; i++) {
         tunedstrings[i] = 0;
       }
+      string = tunecounter;
+      if (!calibration) {
+        string_tuned[string] = false;
+      }
       allstringsfunc();
     }
 
@@ -713,6 +716,7 @@ void selectNewString() {
   if (allstrings == 1) {
     tunedstrings[tunecounter] = 1; //sets value in array specified by tunecounter
     tunecounter++; //increments counter each time this option is selected
+    string=tunecounter;
     genie.WriteObject(GENIE_OBJ_USERIMAGES, tunecounterindex, 2); //marks previously selected string as tuned
     allstringsfunc();//display request to pluck next string along
   }
